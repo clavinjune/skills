@@ -1,0 +1,12 @@
+// pkg/<Domain>Client interface — pkg/<domain>.go, alongside the existing
+// <Domain>Service/<Domain>Repository interfaces. Same shape as gRPC's own
+// generated Client/Server split: same RPC method names, same
+// proto-shaped Request/Response types the handler already decodes, but a
+// distinct interface — a network-calling client is not a business-logic
+// service, don't reuse one interface for both.
+type <Domain>Client interface {
+	Create<Domain>(ctx context.Context, req *<module>v1.Create<Domain>Request) (*<module>v1.<Domain>, error)
+	Get<Domain>(ctx context.Context, req *<module>v1.Get<Domain>Request) (*<module>v1.<Domain>, error)
+	List<Domain>s(ctx context.Context, req *<module>v1.List<Domain>sRequest) (*<module>v1.List<Domain>sResponse, error)
+	Update<Domain>(ctx context.Context, req *<module>v1.Update<Domain>Request) (*<module>v1.<Domain>, error)
+}

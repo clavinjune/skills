@@ -1,0 +1,106 @@
+// cmd/<binary>-cli/cmd/<domain>/commands.go — get/<domain> merges list+get
+// (kubectl-style, see Pitfalls), create/update apply their proto Request
+// directly. Every builder takes the pkg.<Domain>Client INTERFACE as a
+// parameter (not a concrete *client.Client) — this is what makes RunE
+// unit-testable later: a test constructs a fake implementing the same
+// small interface and calls newGetCmd(fake, ...) directly, no server, no
+// HTTP, no wire tree. See templates/cli/domain_commands_test.go.tmpl.
+package <domain>
+
+import (
+	"context"
+
+	"github.com/spf13/cobra"
+
+	"<modulePath>/internal/cliutil"
+	"<modulePath>/pkg"
+	<module>v1 "<modulePath>/pkg/<module>/v1"
+)
+
+func newGetCmd(c pkg.<Domain>Client, format func() cliutil.OutputFormat) *cobra.Command {
+	return &cobra.Command{
+		Use:   "<domain> [name]",
+		Short: "Get a <domain> by resource name, or list all if name is omitted",
+		Args:  cobra.MaximumNArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			ctx := cmd.Context()
+			if len(args) == 1 {
+				resp, err := c.Get<Domain>(ctx, &<module>v1.Get<Domain>Request{Name: args[0]})
+				if err != nil {
+					return err
+				}
+				return cliutil.PrintResult(cmd.OutOrStdout(), format(), resp, table{resp}, table{resp})
+			}
+			items, err := listAll(ctx, c)
+			if err != nil {
+				return err
+			}
+			resp := &<module>v1.List<Domain>sResponse{<Domain>s: items}
+			return cliutil.PrintResult(cmd.OutOrStdout(), format(), resp, listTable{items}, listTable{items})
+		},
+	}
+}
+
+// listAll transparently follows next_page_token until exhausted — the
+// CLI never surfaces page tokens to the user (kubectl "get" UX).
+func listAll(ctx context.Context, c pkg.<Domain>Client) ([]*<module>v1.<Domain>, error) {
+	var all []*<module>v1.<Domain>
+	pageToken := ""
+	for {
+		resp, err := c.List<Domain>s(ctx, &<module>v1.List<Domain>sRequest{PageToken: pageToken})
+		if err != nil {
+			return nil, err
+		}
+		all = append(all, resp.Get<Domain>s()...)
+		if resp.GetNextPageToken() == "" {
+			return all, nil
+		}
+		pageToken = resp.GetNextPageToken()
+	}
+}
+
+func newCreateCmd(c pkg.<Domain>Client, format func() cliutil.OutputFormat) *cobra.Command {
+	var displayName string
+	cmd := &cobra.Command{
+		Use:   "<domain>",
+		Short: "Create a <domain>",
+		Args:  cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			req := &<module>v1.Create<Domain>Request{<Domain>: &<module>v1.<Domain>{DisplayName: displayName}}
+			resp, err := c.Create<Domain>(cmd.Context(), req)
+			if err != nil {
+				return err
+			}
+			return cliutil.PrintResult(cmd.OutOrStdout(), format(), resp, table{resp}, table{resp})
+		},
+	}
+	cmd.Flags().StringVar(&displayName, "display-name", "", "<domain> display name")
+	_ = cmd.MarkFlagRequired("display-name")
+	return cmd
+}
+
+func newUpdateCmd(c pkg.<Domain>Client, format func() cliutil.OutputFormat) *cobra.Command {
+	var displayName string
+	cmd := &cobra.Command{
+		Use:   "<domain> <name>",
+		Short: "Update a <domain> by resource name",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			// Only the flags the caller actually set go into the mask —
+			// see book's update command for the multi-flag version of
+			// this pattern (Changed()-gated per field).
+			req := &<module>v1.Update<Domain>Request{
+				<Domain>:   &<module>v1.<Domain>{Name: args[0], DisplayName: displayName},
+				UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"display_name"}},
+			}
+			resp, err := c.Update<Domain>(cmd.Context(), req)
+			if err != nil {
+				return err
+			}
+			return cliutil.PrintResult(cmd.OutOrStdout(), format(), resp, table{resp}, table{resp})
+		},
+	}
+	cmd.Flags().StringVar(&displayName, "display-name", "", "new <domain> display name")
+	_ = cmd.MarkFlagRequired("display-name")
+	return cmd
+}

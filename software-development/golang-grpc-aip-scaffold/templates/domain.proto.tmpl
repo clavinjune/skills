@@ -1,0 +1,65 @@
+syntax = "proto3";
+
+// {{.Domain}} — top-level resource: {{.plural}}/{ {{- .domain -}} }.
+//
+// NOTE: this proto defines message types (the contract) only if the
+// project's transport is plain net/http (see internal/{{.domain}}/handler.go).
+// If the project uses real gRPC transport, also declare a service block
+// (see references/bookinfo-example.md's mulyani-style note, or just add
+// `service {{.Domain}}Service { rpc ... }` with the same RPC signatures).
+package {{.module}}.v1;
+
+import "google/api/field_behavior.proto";
+import "google/api/resource.proto";
+import "google/protobuf/field_mask.proto";
+import "google/protobuf/timestamp.proto";
+
+option go_package = "{{.modulePath}}/pkg/{{.module}}/v1;{{.module}}v1";
+
+message {{.Domain}} {
+  option (google.api.resource) = {
+    type: "{{.module}}.example.dev/{{.Domain}}"
+    pattern: "{{.plural}}/{ {{- .domain -}} }"
+    singular: "{{.domain}}"
+    plural: "{{.plural}}"
+  };
+
+  // Format: {{.plural}}/{ {{- .domain -}} }
+  string name = 1 [(google.api.field_behavior) = IDENTIFIER];
+
+  string display_name = 2 [(google.api.field_behavior) = REQUIRED];
+
+  // AIP-142.
+  google.protobuf.Timestamp create_time = 3 [(google.api.field_behavior) = OUTPUT_ONLY];
+  google.protobuf.Timestamp update_time = 4 [(google.api.field_behavior) = OUTPUT_ONLY];
+}
+
+// AIP-133
+message Create{{.Domain}}Request {
+  {{.Domain}} {{.domain}} = 1 [(google.api.field_behavior) = REQUIRED];
+}
+
+// AIP-131
+message Get{{.Domain}}Request {
+  string name = 1 [
+    (google.api.field_behavior) = REQUIRED,
+    (google.api.resource_reference).type = "{{.module}}.example.dev/{{.Domain}}"
+  ];
+}
+
+// AIP-132
+message List{{.Plural}}Request {
+  int32 page_size = 1;
+  string page_token = 2;
+}
+
+message List{{.Plural}}Response {
+  repeated {{.Domain}} {{.plural}} = 1;
+  string next_page_token = 2;
+}
+
+// AIP-134
+message Update{{.Domain}}Request {
+  {{.Domain}} {{.domain}} = 1 [(google.api.field_behavior) = REQUIRED];
+  google.protobuf.FieldMask update_mask = 2 [(google.api.field_behavior) = OPTIONAL];
+}

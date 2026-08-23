@@ -1,0 +1,43 @@
+// cmd/<binary>-cli/cmd/root.go — top-level command tree. Subcommands
+// must exist before cobra parses args (routing walks already-added
+// children), but --addr isn't known until flags parse — so the shared
+// client is built once, eagerly, with an empty BaseURL that
+// PersistentPreRunE fills in from the parsed flag before any RunE fires.
+package cmd
+
+import (
+	"net/http"
+
+	"github.com/spf13/cobra"
+
+	"<modulePath>/internal/cliutil"
+	"<modulePath>/pkg/client"
+)
+
+func NewRootCmd(httpClient *http.Client) *cobra.Command {
+	var (
+		addr   string
+		output string
+	)
+	root := &cobra.Command{Use: "<binary>-cli", Short: "kubectl-style CLI for <binary>-server"}
+	root.PersistentFlags().StringVar(&addr, "addr", "http://localhost:8080", "<binary>-server base URL")
+	root.PersistentFlags().StringVarP(&output, "output", "o", "table", "output format: table|wide|json|yaml|name")
+
+	format := func() cliutil.OutputFormat { return cliutil.OutputFormat(output) }
+
+	getCmd := &cobra.Command{Use: "get", Short: "Get or list a resource"}
+	createCmd := &cobra.Command{Use: "create", Short: "Create a resource"}
+	updateCmd := &cobra.Command{Use: "update", Short: "Update a resource"}
+	root.AddCommand(getCmd, createCmd, updateCmd)
+
+	c := client.New(httpClient, "")
+	dep := Wire(c, format)
+	dep.<Domain>.Register(getCmd, createCmd, updateCmd)
+	// One more line per additional domain: dep.<Domain2>.Register(...)
+
+	root.PersistentPreRunE = func(cmd *cobra.Command, _ []string) error {
+		c.BaseURL = addr
+		return nil
+	}
+	return root
+}

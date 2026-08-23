@@ -1,0 +1,71 @@
+package {{.domain}}
+
+import (
+	"context"
+	"database/sql"
+	"errors"
+	"fmt"
+
+	"{{.modulePath}}/pkg"
+	"{{.modulePath}}/pkg/sqlc"
+)
+
+var _ pkg.{{.Domain}}Repository = (*repository)(nil)
+
+type repository struct {
+	queries *sqlc.Queries
+}
+
+func (r *repository) Create{{.Domain}}(ctx context.Context, item *sqlc.{{.Domain}}) (*sqlc.{{.Domain}}, error) {
+	row, err := r.queries.Create{{.Domain}}(ctx, sqlc.Create{{.Domain}}Params{
+		ID:          item.ID,
+		DisplayName: item.DisplayName,
+	})
+	if err != nil {
+		return nil, err
+	}
+	return &row, nil
+}
+
+func (r *repository) Get{{.Domain}}(ctx context.Context, id string) (*sqlc.{{.Domain}}, error) {
+	row, err := r.queries.Get{{.Domain}}(ctx, id)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, fmt.Errorf("%w: {{.domain}} %q", pkg.ErrNotFound, id)
+		}
+		return nil, err
+	}
+	return &row, nil
+}
+
+// List{{.Plural}} returns a VALUE slice ([]sqlc.{{.Domain}}, not []*sqlc.{{.Domain}}) —
+// sqlc's generated query already returns by value; don't box into pointers
+// just to match an interface signature (see skill Pitfalls).
+func (r *repository) List{{.Plural}}(ctx context.Context, pageSize int32, lastID string) ([]sqlc.{{.Domain}}, error) {
+	limit := int64(pageSize)
+	if limit <= 0 {
+		limit = pkg.DefaultPageSize
+	}
+	rows, err := r.queries.List{{.Plural}}(ctx, sqlc.List{{.Plural}}Params{
+		ID:    lastID,
+		Limit: limit,
+	})
+	if err != nil {
+		return nil, err
+	}
+	return rows, nil
+}
+
+func (r *repository) Update{{.Domain}}(ctx context.Context, item *sqlc.{{.Domain}}) (*sqlc.{{.Domain}}, error) {
+	row, err := r.queries.Update{{.Domain}}(ctx, sqlc.Update{{.Domain}}Params{
+		DisplayName: item.DisplayName,
+		ID:          item.ID,
+	})
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, fmt.Errorf("%w: {{.domain}} %q", pkg.ErrNotFound, item.ID)
+		}
+		return nil, err
+	}
+	return &row, nil
+}

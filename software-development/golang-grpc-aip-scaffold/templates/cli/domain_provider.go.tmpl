@@ -1,0 +1,38 @@
+// cmd/<binary>-cli/cmd/<domain>/provider.go — wires this domain's CLI
+// subcommand: pkg.<Domain>Client (bound by the top-level cmd.ProviderSet
+// to the shared *client.Client) -> Commands (the cobra builders).
+package <domain>
+
+import (
+	"github.com/google/wire"
+	"github.com/spf13/cobra"
+
+	"<modulePath>/internal/cliutil"
+	"<modulePath>/pkg"
+)
+
+var ProviderSet = wire.NewSet(
+	ProvideCommands,
+)
+
+// Commands holds the built cobra commands for this domain, ready to be
+// added under the shared get/create/update verb parents.
+type Commands struct {
+	Get    *cobra.Command
+	Create *cobra.Command
+	Update *cobra.Command
+}
+
+func (c *Commands) Register(getCmd, createCmd, updateCmd *cobra.Command) {
+	getCmd.AddCommand(c.Get)
+	createCmd.AddCommand(c.Create)
+	updateCmd.AddCommand(c.Update)
+}
+
+func ProvideCommands(client pkg.<Domain>Client, format func() cliutil.OutputFormat) *Commands {
+	return &Commands{
+		Get:    newGetCmd(client, format),
+		Create: newCreateCmd(client, format),
+		Update: newUpdateCmd(client, format),
+	}
+}

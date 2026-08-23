@@ -1,0 +1,134 @@
+package {{.domain}}
+
+import (
+	"context"
+	"fmt"
+
+	"github.com/google/uuid"
+
+	"{{.modulePath}}/internal/pagination"
+	"{{.modulePath}}/pkg"
+	{{.module}}v1 "{{.modulePath}}/pkg/{{.module}}/v1"
+	"{{.modulePath}}/pkg/sqlc"
+)
+
+var _ pkg.{{.Domain}}Service = (*service)(nil)
+
+type service struct {
+	repository pkg.{{.Domain}}Repository
+}
+
+func (s *service) Create{{.Domain}}(ctx context.Context, item *{{.module}}v1.{{.Domain}}) (*{{.module}}v1.{{.Domain}}, error) {
+	if item.GetDisplayName() == "" {
+		return nil, fmt.Errorf("%w: display_name is required", pkg.ErrInvalidArgument)
+	}
+	row, err := s.repository.Create{{.Domain}}(ctx, &sqlc.{{.Domain}}{
+		ID:          newID(),
+		DisplayName: item.GetDisplayName(),
+	})
+	if err != nil {
+		return nil, err
+	}
+	return toProto(row), nil
+}
+
+func (s *service) Get{{.Domain}}(ctx context.Context, name string) (*{{.module}}v1.{{.Domain}}, error) {
+	id, err := pkg.Parse{{.Domain}}Name(name)
+	if err != nil {
+		return nil, err
+	}
+	row, err := s.repository.Get{{.Domain}}(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+	return toProto(row), nil
+}
+
+// List{{.Plural}} returns up to pageSize {{.plural}} after the row identified by
+// pageToken (keyset/cursor pagination: id > lastID, ORDER BY id). Fetches
+// one extra row to detect whether another page follows without a second
+// COUNT query.
+func (s *service) List{{.Plural}}(ctx context.Context, pageSize int32, pageToken string) ([]*{{.module}}v1.{{.Domain}}, string, error) {
+	lastID, err := pagination.Decode(pageToken)
+	if err != nil {
+		return nil, "", fmt.Errorf("%w: %w", pkg.ErrInvalidArgument, err)
+	}
+	limit := pageSize
+	if limit <= 0 {
+		limit = pkg.DefaultPageSize
+	}
+	rows, err := s.repository.List{{.Plural}}(ctx, limit+1, lastID)
+	if err != nil {
+		return nil, "", err
+	}
+	var nextPageToken string
+	if int32(len(rows)) > limit {
+		rows = rows[:limit]
+		nextPageToken = pagination.Encode(rows[len(rows)-1].ID)
+	}
+	items := make([]*{{.module}}v1.{{.Domain}}, len(rows))
+	for i, row := range rows {
+		items[i] = toProto(&row)
+	}
+	return items, nextPageToken, nil
+}
+
+func (s *service) Update{{.Domain}}(ctx context.Context, item *{{.module}}v1.{{.Domain}}, updateMaskPaths []string) (*{{.module}}v1.{{.Domain}}, error) {
+	if item == nil {
+		return nil, fmt.Errorf("%w: {{.domain}} is required", pkg.ErrInvalidArgument)
+	}
+	id, err := pkg.Parse{{.Domain}}Name(item.GetName())
+	if err != nil {
+		return nil, err
+	}
+
+	paths := updateMaskPaths
+	if len(paths) == 0 {
+		paths = []string{"display_name"}
+	}
+	mask := make(map[string]bool, len(paths))
+	for _, p := range paths {
+		if !pkg.Mutable{{.Domain}}Paths[p] {
+			return nil, fmt.Errorf("%w: update_mask contains unsupported or immutable path %q", pkg.ErrInvalidArgument, p)
+		}
+		mask[p] = true
+	}
+
+	existing, err := s.repository.Get{{.Domain}}(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+
+	updated := *existing
+	if mask["display_name"] {
+		if item.GetDisplayName() == "" {
+			return nil, fmt.Errorf("%w: display_name is required", pkg.ErrInvalidArgument)
+		}
+		updated.DisplayName = item.GetDisplayName()
+	}
+
+	row, err := s.repository.Update{{.Domain}}(ctx, &updated)
+	if err != nil {
+		return nil, err
+	}
+	return toProto(row), nil
+}
+
+// newID generates a UUIDv7 resource id (see skill Pitfalls: UUIDv7 for ids).
+func newID() string {
+	id, err := uuid.NewV7()
+	if err != nil {
+		return uuid.NewString()
+	}
+	return id.String()
+}
+
+// toProto maps an sqlc.{{.Domain}} to its proto representation.
+func toProto(row *sqlc.{{.Domain}}) *{{.module}}v1.{{.Domain}} {
+	return &{{.module}}v1.{{.Domain}}{
+		Name:        pkg.Format{{.Domain}}Name(row.ID),
+		DisplayName: row.DisplayName,
+		CreateTime:  pkg.ParseTimestamp(row.CreatedAt),
+		UpdateTime:  pkg.ParseTimestamp(row.UpdatedAt),
+	}
+}

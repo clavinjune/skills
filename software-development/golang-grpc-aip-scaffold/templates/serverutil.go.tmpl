@@ -1,0 +1,93 @@
+// Package serverutil holds the shared bootstrap lifecycle for this
+// project's long-running HTTP server binaries (e.g. an API server and a
+// frontend server): stdout JSON logging with an env-controlled debug
+// level, and graceful shutdown wired to OS termination signals. CLI
+// binaries don't use this — they take cobra flags, not env vars, and have
+// no long-running listener to shut down.
+package serverutil
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"log/slog"
+	"net/http"
+	"os"
+	"os/signal"
+	"syscall"
+	"time"
+
+	semconv "go.opentelemetry.io/otel/semconv/v1.43.0"
+)
+
+// ShutdownTimeout bounds how long ListenAndServe's graceful shutdown waits
+// for in-flight requests to finish once termination is signaled.
+const ShutdownTimeout = 10 * time.Second
+
+// NewLogger returns a slog.Logger writing JSON to os.Stdout. Debug level
+// (with AddSource) is enabled when the named env var is set to any
+// non-empty value; otherwise it logs at Info without source locations.
+func NewLogger(debugEnvVar string) *slog.Logger {
+	debug := os.Getenv(debugEnvVar) != ""
+
+	level := slog.LevelInfo
+	if debug {
+		level = slog.LevelDebug
+	}
+	return slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{
+		Level:     level,
+		AddSource: debug,
+	}))
+}
+
+// Main runs run with a context cancelled on SIGINT/SIGTERM, logging and
+// os.Exit(1)-ing on error. Call this as the entire body of main().
+func Main(logger *slog.Logger, run func(ctx context.Context) error) {
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+
+	if err := run(ctx); err != nil {
+		logger.LogAttrs(context.Background(), slog.LevelError, "server exited",
+			slog.String(string(semconv.ExceptionMessageKey), err.Error()),
+		)
+		os.Exit(1)
+	}
+}
+
+// Serve runs an http.Server{Addr: addr, Handler: handler} until ctx is
+// cancelled, then gracefully shuts it down within ShutdownTimeout. Logs a
+// "listening" line before serving and a "shutdown signal received" line
+// once ctx.Done() fires.
+func Serve(ctx context.Context, logger *slog.Logger, addr string, handler http.Handler) error {
+	srv := &http.Server{
+		Addr:    addr,
+		Handler: handler,
+	}
+
+	serveErr := make(chan error, 1)
+	go func() {
+		logger.LogAttrs(context.Background(), slog.LevelInfo, "listening",
+			slog.String(string(semconv.ServerAddressKey), addr),
+		)
+		if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+			serveErr <- err
+			return
+		}
+		serveErr <- nil
+	}()
+
+	select {
+	case err := <-serveErr:
+		return err
+	case <-ctx.Done():
+		logger.LogAttrs(context.Background(), slog.LevelInfo, "shutdown signal received")
+	}
+
+	shutdownCtx, cancel := context.WithTimeout(context.Background(), ShutdownTimeout)
+	defer cancel()
+
+	if err := srv.Shutdown(shutdownCtx); err != nil {
+		return fmt.Errorf("graceful shutdown: %w", err)
+	}
+	return <-serveErr
+}

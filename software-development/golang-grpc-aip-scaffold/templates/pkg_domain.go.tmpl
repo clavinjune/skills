@@ -1,0 +1,62 @@
+// pkg/{{.domain}}.go — resource-name helpers + Service/Repository interface
+// contracts for the {{.Domain}} domain. Generate with:
+//   gotemplate -d Domain={{"{{"}}.Domain{{"}}"}} ...  (or just hand-substitute Domain/domain below)
+package pkg
+
+import (
+	"context"
+	"fmt"
+	"net/http"
+	"strings"
+
+	{{.module}}v1 "{{.modulePath}}/pkg/{{.module}}/v1"
+	"{{.modulePath}}/pkg/sqlc"
+)
+
+const {{.domain}}NamePrefix = "{{.plural}}/"
+
+// Format{{.Domain}}Name builds the AIP resource name from a bare id:
+// "{{.plural}}/{ {{- .domain -}} }".
+func Format{{.Domain}}Name(id string) string {
+	return {{.domain}}NamePrefix + id
+}
+
+// Parse{{.Domain}}Name extracts the bare id from "{{.plural}}/{ {{- .domain -}} }".
+func Parse{{.Domain}}Name(name string) (string, error) {
+	id, ok := strings.CutPrefix(name, {{.domain}}NamePrefix)
+	if !ok || id == "" || strings.Contains(id, "/") {
+		return "", fmt.Errorf("%w: invalid {{.domain}} name %q, expected format %q", ErrInvalidArgument, name, {{.domain}}NamePrefix+"{{"{"}}{{.domain}}{{"}"}}")
+	}
+	return id, nil
+}
+
+// {{.Domain}}Handler exposes the {{.domain}} HTTP endpoints on a mux.
+type {{.Domain}}Handler interface {
+	Register(mux *http.ServeMux)
+}
+
+// {{.Domain}}Service implements the AIP standard verbs for {{.Domain}}.
+type {{.Domain}}Service interface {
+	Create{{.Domain}}(ctx context.Context, item *{{.module}}v1.{{.Domain}}) (*{{.module}}v1.{{.Domain}}, error)
+	Get{{.Domain}}(ctx context.Context, name string) (*{{.module}}v1.{{.Domain}}, error)
+	List{{.Plural}}(ctx context.Context, pageSize int32, pageToken string) ([]*{{.module}}v1.{{.Domain}}, string, error)
+	Update{{.Domain}}(ctx context.Context, item *{{.module}}v1.{{.Domain}}, updateMaskPaths []string) (*{{.module}}v1.{{.Domain}}, error)
+}
+
+// {{.Domain}}Repository wraps sqlc access for {{.plural}}.
+type {{.Domain}}Repository interface {
+	Create{{.Domain}}(ctx context.Context, item *sqlc.{{.Domain}}) (*sqlc.{{.Domain}}, error)
+	Get{{.Domain}}(ctx context.Context, id string) (*sqlc.{{.Domain}}, error)
+	// List{{.Plural}} returns rows with id > lastID (empty lastID = from the
+	// start), ordered by id, keyset-paginated.
+	List{{.Plural}}(ctx context.Context, pageSize int32, lastID string) ([]sqlc.{{.Domain}}, error)
+	Update{{.Domain}}(ctx context.Context, item *sqlc.{{.Domain}}) (*sqlc.{{.Domain}}, error)
+}
+
+// Mutable{{.Domain}}Paths lists the update_mask paths Update{{.Domain}}'s client is
+// allowed to set. Exported so CLI/frontend clients build their own
+// --update-mask flags / form fields from the same source of truth instead
+// of hardcoding a duplicate list.
+var Mutable{{.Domain}}Paths = map[string]bool{
+	"display_name": true,
+}

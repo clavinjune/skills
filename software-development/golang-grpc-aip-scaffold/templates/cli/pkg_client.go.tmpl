@@ -1,0 +1,92 @@
+// pkg/client/<module>.go — implements every domain's <Domain>Client
+// interface over plain HTTP against <binary>-server. One shared struct,
+// one file, regardless of how many domains exist; add a
+// Create/Get/List/Update<Domain> method group per new domain, don't
+// create a second Client type.
+package client
+
+import (
+	"bytes"
+	"context"
+	"encoding/json/v2"
+	"fmt"
+	"io"
+	"net/http"
+	"net/url"
+
+	<module>v1 "<modulePath>/pkg/<module>/v1"
+)
+
+// Client implements pkg.<Domain>Client (and every other domain's Client
+// interface) over HTTP. BaseURL is mutable rather than passed at
+// construction: the CLI needs to build the full wire-injected command
+// tree before cobra parses --addr, so the client exists first with an
+// empty BaseURL, filled in later — see cmd/root.go.tmpl.
+type Client struct {
+	HTTPClient *http.Client
+	BaseURL    string
+}
+
+func New(httpClient *http.Client, baseURL string) *Client {
+	if httpClient == nil {
+		httpClient = http.DefaultClient
+	}
+	return &Client{HTTPClient: httpClient, BaseURL: baseURL}
+}
+
+func (c *Client) Create<Domain>(ctx context.Context, req *<module>v1.Create<Domain>Request) (*<module>v1.<Domain>, error) {
+	body, err := json.Marshal(req.Get<Domain>())
+	if err != nil {
+		return nil, err
+	}
+	u := fmt.Sprintf("%s/<module>/v1/%s/<domain>s", c.BaseURL, req.GetParent())
+	var resp <module>v1.<Domain>
+	return &resp, c.do(ctx, http.MethodPost, u, bytes.NewReader(body), &resp)
+}
+
+func (c *Client) Get<Domain>(ctx context.Context, req *<module>v1.Get<Domain>Request) (*<module>v1.<Domain>, error) {
+	u := fmt.Sprintf("%s/<module>/v1/%s", c.BaseURL, req.GetName())
+	var resp <module>v1.<Domain>
+	return &resp, c.do(ctx, http.MethodGet, u, nil, &resp)
+}
+
+func (c *Client) List<Domain>s(ctx context.Context, req *<module>v1.List<Domain>sRequest) (*<module>v1.List<Domain>sResponse, error) {
+	q := url.Values{}
+	if req.GetPageToken() != "" {
+		q.Set("page_token", req.GetPageToken())
+	}
+	u := fmt.Sprintf("%s/<module>/v1/%s/<domain>s?%s", c.BaseURL, req.GetParent(), q.Encode())
+	var resp <module>v1.List<Domain>sResponse
+	return &resp, c.do(ctx, http.MethodGet, u, nil, &resp)
+}
+
+func (c *Client) Update<Domain>(ctx context.Context, req *<module>v1.Update<Domain>Request) (*<module>v1.<Domain>, error) {
+	body, err := json.Marshal(req.Get<Domain>())
+	if err != nil {
+		return nil, err
+	}
+	q := url.Values{"update_mask": {joinPaths(req.GetUpdateMask().GetPaths())}}
+	u := fmt.Sprintf("%s/<module>/v1/%s?%s", c.BaseURL, req.Get<Domain>().GetName(), q.Encode())
+	var resp <module>v1.<Domain>
+	return &resp, c.do(ctx, http.MethodPatch, u, bytes.NewReader(body), &resp)
+}
+
+func (c *Client) do(ctx context.Context, method, u string, body io.Reader, out any) error {
+	httpReq, err := http.NewRequestWithContext(ctx, method, u, body)
+	if err != nil {
+		return err
+	}
+	if body != nil {
+		httpReq.Header.Set("Content-Type", "application/json")
+	}
+	resp, err := c.HTTPClient.Do(httpReq)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode >= 300 {
+		b, _ := io.ReadAll(resp.Body)
+		return fmt.Errorf("<module>: %s %s: %s: %s", method, u, resp.Status, b)
+	}
+	return json.UnmarshalRead(resp.Body, out)
+}

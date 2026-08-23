@@ -1,0 +1,33 @@
+package {{.domain}}
+
+import (
+	"database/sql"
+
+	"github.com/google/wire"
+
+	"{{.modulePath}}/pkg"
+	"{{.modulePath}}/pkg/sqlc"
+)
+
+// ProviderSet wires the {{.domain}} domain: handler -> service -> repository,
+// each layer bound to its pkg interface.
+var ProviderSet = wire.NewSet(
+	ProvideHandler,
+	ProvideService,
+	ProvideRepository,
+	wire.Bind(new(pkg.{{.Domain}}Handler), new(*handler)),
+	wire.Bind(new(pkg.{{.Domain}}Service), new(*service)),
+	wire.Bind(new(pkg.{{.Domain}}Repository), new(*repository)),
+)
+
+func ProvideHandler(service pkg.{{.Domain}}Service) *handler {
+	return &handler{service: service}
+}
+
+func ProvideService(repository pkg.{{.Domain}}Repository) *service {
+	return &service{repository: repository}
+}
+
+func ProvideRepository(db *sql.DB) *repository {
+	return &repository{queries: sqlc.New(db)}
+}

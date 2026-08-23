@@ -1,0 +1,88 @@
+// internal/cliutil/cliutil.go — shared CLI presentation plumbing,
+// imported by every domain's cmd package (parallel to internal/serverutil
+// on the server side). Interface methods are EXPORTED
+// (TableHeaders/TableRows/ResourceNames) because a domain package
+// implementing them lives in a different package than cliutil itself —
+// Go can't satisfy an unexported interface method across package
+// boundaries.
+package cliutil
+
+import (
+	"encoding/json/v2"
+	"fmt"
+	"io"
+	"text/tabwriter"
+
+	"gopkg.in/yaml.v3"
+)
+
+type OutputFormat string
+
+const (
+	OutputTable OutputFormat = "table"
+	OutputWide  OutputFormat = "wide"
+	OutputJSON  OutputFormat = "json"
+	OutputYAML  OutputFormat = "yaml"
+	OutputName  OutputFormat = "name"
+)
+
+// Tabler renders as a table/wide row set. Namer renders as bare AIP
+// resource names (-o name). Implement both on the same thin per-domain
+// wrapper type (e.g. type table struct{ *bookinfov1.Author }).
+type Tabler interface {
+	TableHeaders(wide bool) []string
+	TableRows(wide bool) [][]string
+}
+
+type Namer interface {
+	ResourceNames() []string
+}
+
+// PrintResult dispatches on format. raw is always the actual proto
+// response value for json/yaml — never pass the Tabler/Namer wrapper to
+// those paths, its unexported embedded field marshals to "{}".
+func PrintResult(w io.Writer, format OutputFormat, raw any, t Tabler, n Namer) error {
+	switch format {
+	case OutputJSON:
+		return json.MarshalWrite(w, raw)
+	case OutputYAML:
+		b, err := json.Marshal(raw)
+		if err != nil {
+			return err
+		}
+		var v any
+		if err := json.Unmarshal(b, &v); err != nil {
+			return err
+		}
+		return yaml.NewEncoder(w).Encode(v)
+	case OutputName:
+		for _, name := range n.ResourceNames() {
+			fmt.Fprintln(w, name)
+		}
+		return nil
+	case OutputWide:
+		return printTable(w, t, true)
+	default:
+		return printTable(w, t, false)
+	}
+}
+
+func printTable(w io.Writer, t Tabler, wide bool) error {
+	tw := tabwriter.NewWriter(w, 0, 4, 3, ' ', 0)
+	fmt.Fprintln(tw, joinTab(t.TableHeaders(wide)))
+	for _, row := range t.TableRows(wide) {
+		fmt.Fprintln(tw, joinTab(row))
+	}
+	return tw.Flush()
+}
+
+func joinTab(cols []string) string {
+	out := ""
+	for i, c := range cols {
+		if i > 0 {
+			out += "\t"
+		}
+		out += c
+	}
+	return out
+}

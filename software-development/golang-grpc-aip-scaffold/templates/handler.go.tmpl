@@ -1,0 +1,84 @@
+package {{.domain}}
+
+import (
+	"net/http"
+	"strconv"
+	"strings"
+
+	"{{.modulePath}}/internal/httpjson"
+	"{{.modulePath}}/pkg"
+	{{.module}}v1 "{{.modulePath}}/pkg/{{.module}}/v1"
+)
+
+var _ pkg.{{.Domain}}Handler = (*handler)(nil)
+
+// handler exposes {{.Domain}}Service over plain net/http (no gRPC).
+// Request/response bodies are the generated proto structs serialized with
+// encoding/json/v2 (see internal/httpjson).
+type handler struct {
+	service pkg.{{.Domain}}Service
+}
+
+// Register mounts the {{.domain}} routes on the mux (Go 1.22+ pattern syntax).
+func (h *handler) Register(mux *http.ServeMux) {
+	mux.HandleFunc("POST /{{.plural}}", h.create{{.Domain}})
+	mux.HandleFunc("GET /{{.plural}}/{ {{- .domain -}} }", h.get{{.Domain}})
+	mux.HandleFunc("GET /{{.plural}}", h.list{{.Plural}})
+	mux.HandleFunc("PATCH /{{.plural}}/{ {{- .domain -}} }", h.update{{.Domain}})
+}
+
+func (h *handler) create{{.Domain}}(w http.ResponseWriter, r *http.Request) {
+	body, err := httpjson.Read[{{.module}}v1.{{.Domain}}](r)
+	if err != nil {
+		httpjson.WriteError(w, err)
+		return
+	}
+	resp, err := h.service.Create{{.Domain}}(r.Context(), &body)
+	if err != nil {
+		httpjson.WriteError(w, err)
+		return
+	}
+	_ = httpjson.Write(w, http.StatusCreated, resp)
+}
+
+func (h *handler) get{{.Domain}}(w http.ResponseWriter, r *http.Request) {
+	resp, err := h.service.Get{{.Domain}}(r.Context(), pkg.Format{{.Domain}}Name(r.PathValue("{{.domain}}")))
+	if err != nil {
+		httpjson.WriteError(w, err)
+		return
+	}
+	_ = httpjson.Write(w, http.StatusOK, resp)
+}
+
+func (h *handler) list{{.Plural}}(w http.ResponseWriter, r *http.Request) {
+	pageSize, _ := strconv.ParseInt(r.URL.Query().Get("page_size"), 10, 32)
+	items, nextPageToken, err := h.service.List{{.Plural}}(r.Context(), int32(pageSize), r.URL.Query().Get("page_token"))
+	if err != nil {
+		httpjson.WriteError(w, err)
+		return
+	}
+	_ = httpjson.Write(w, http.StatusOK, &{{.module}}v1.List{{.Plural}}Response{
+		{{.Plural}}:      items,
+		NextPageToken: nextPageToken,
+	})
+}
+
+func (h *handler) update{{.Domain}}(w http.ResponseWriter, r *http.Request) {
+	body, err := httpjson.Read[{{.module}}v1.{{.Domain}}](r)
+	if err != nil {
+		httpjson.WriteError(w, err)
+		return
+	}
+	body.Name = pkg.Format{{.Domain}}Name(r.PathValue("{{.domain}}"))
+
+	var paths []string
+	if raw := r.URL.Query().Get("update_mask"); raw != "" {
+		paths = strings.Split(raw, ",")
+	}
+	resp, err := h.service.Update{{.Domain}}(r.Context(), &body, paths)
+	if err != nil {
+		httpjson.WriteError(w, err)
+		return
+	}
+	_ = httpjson.Write(w, http.StatusOK, resp)
+}
