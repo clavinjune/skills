@@ -1,4 +1,4 @@
-// cmd/<binary>-cli/cmd/provider.go + wire.go — top-level CLI injector,
+// cmd/<binary>ctl/cmd/provider.go + wire.go — top-level CLI injector,
 // same single-injector shape as internal/wire.go. Add one field to
 // Dependency + one ProviderSet entry (domain package + a provideXClient
 // bind function) per new domain.
@@ -7,7 +7,7 @@ package cmd
 import (
 	"github.com/google/wire"
 
-	"<modulePath>/cmd/<binary>-cli/cmd/<domain>"
+	"<modulePath>/cmd/<binary>ctl/cmd/<domain>"
 	"<modulePath>/pkg"
 	"<modulePath>/pkg/client"
 )

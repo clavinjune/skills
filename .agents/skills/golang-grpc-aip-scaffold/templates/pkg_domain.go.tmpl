@@ -41,6 +41,7 @@ type {{.Domain}}Service interface {
 	Get{{.Domain}}(ctx context.Context, name string) (*{{.module}}v1.{{.Domain}}, error)
 	List{{.Plural}}(ctx context.Context, pageSize int32, pageToken string) ([]*{{.module}}v1.{{.Domain}}, string, error)
 	Update{{.Domain}}(ctx context.Context, item *{{.module}}v1.{{.Domain}}, updateMaskPaths []string) (*{{.module}}v1.{{.Domain}}, error)
+	Delete{{.Domain}}(ctx context.Context, name string) error
 }
 
 // {{.Domain}}Repository wraps sqlc access for {{.plural}}.
@@ -51,6 +52,7 @@ type {{.Domain}}Repository interface {
 	// start), ordered by id, keyset-paginated.
 	List{{.Plural}}(ctx context.Context, pageSize int32, lastID string) ([]sqlc.{{.Domain}}, error)
 	Update{{.Domain}}(ctx context.Context, item *sqlc.{{.Domain}}) (*sqlc.{{.Domain}}, error)
+	Delete{{.Domain}}(ctx context.Context, id string) error
 }
 
 // Mutable{{.Domain}}Paths lists the update_mask paths Update{{.Domain}}'s client is

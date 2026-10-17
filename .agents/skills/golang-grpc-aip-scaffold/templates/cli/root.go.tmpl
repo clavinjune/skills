@@ -1,4 +1,4 @@
-// cmd/<binary>-cli/cmd/root.go — top-level command tree. Subcommands
+// cmd/<binary>ctl/cmd/root.go — top-level command tree. Subcommands
 // must exist before cobra parses args (routing walks already-added
 // children), but --addr isn't known until flags parse — so the shared
 // client is built once, eagerly, with an empty BaseURL that
@@ -6,6 +6,7 @@
 package cmd
 
 import (
+	"context"
 	"net/http"
 
 	"github.com/spf13/cobra"
@@ -19,7 +20,7 @@ func NewRootCmd(httpClient *http.Client) *cobra.Command {
 		addr   string
 		output string
 	)
-	root := &cobra.Command{Use: "<binary>-cli", Short: "kubectl-style CLI for <binary>-server"}
+	root := &cobra.Command{Use: "<binary>ctl", Short: "kubectl-style CLI for <binary>-server"}
 	root.PersistentFlags().StringVar(&addr, "addr", "http://localhost:8080", "<binary>-server base URL")
 	root.PersistentFlags().StringVarP(&output, "output", "o", "table", "output format: table|wide|json|yaml|name")
 
@@ -27,17 +28,22 @@ func NewRootCmd(httpClient *http.Client) *cobra.Command {
 
 	getCmd := &cobra.Command{Use: "get", Short: "Get or list a resource"}
 	createCmd := &cobra.Command{Use: "create", Short: "Create a resource"}
-	updateCmd := &cobra.Command{Use: "update", Short: "Update a resource"}
-	root.AddCommand(getCmd, createCmd, updateCmd)
+	editCmd := &cobra.Command{Use: "edit", Short: "Edit a resource in YAML using your editor"}
+	deleteCmd := &cobra.Command{Use: "delete", Short: "Delete a resource by name"}
 
 	c := client.New(httpClient, "")
-	dep := Wire(c, format)
-	dep.<Domain>.Register(getCmd, createCmd, updateCmd)
+	editor := cliutil.Editor(func(ctx context.Context, data []byte) ([]byte, error) {
+		return cliutil.OpenEditor(ctx, data, root.InOrStdin(), root.OutOrStdout(), root.ErrOrStderr())
+	})
+	dep := Wire(c, format, editor)
+	dep.<Domain>.Register(getCmd, createCmd, editCmd, deleteCmd)
 	// One more line per additional domain: dep.<Domain2>.Register(...)
+	resources := []cliutil.Resource{dep.<Domain>.Resource} // Include every domain.
+	root.AddCommand(getCmd, createCmd, editCmd, deleteCmd, cliutil.NewExplainCmd(resources...))
 
 	root.PersistentPreRunE = func(cmd *cobra.Command, _ []string) error {
 		c.BaseURL = addr
-		return nil
+		return cliutil.ValidateResources(resources)
 	}
 	return root
 }

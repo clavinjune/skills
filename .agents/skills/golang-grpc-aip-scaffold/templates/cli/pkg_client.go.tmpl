@@ -1,7 +1,7 @@
 // pkg/client/<module>.go — implements every domain's <Domain>Client
 // interface over plain HTTP against <binary>-server. One shared struct,
 // one file, regardless of how many domains exist; add a
-// Create/Get/List/Update<Domain> method group per new domain, don't
+// Create/Get/List/Update/Delete<Domain> method group per new domain, don't
 // create a second Client type.
 package client
 
@@ -13,6 +13,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"strings"
 
 	<module>v1 "<modulePath>/pkg/<module>/v1"
 )
@@ -39,24 +40,24 @@ func (c *Client) Create<Domain>(ctx context.Context, req *<module>v1.Create<Doma
 	if err != nil {
 		return nil, err
 	}
-	u := fmt.Sprintf("%s/<module>/v1/%s/<domain>s", c.BaseURL, req.GetParent())
+	u := fmt.Sprintf("%s/<plural>", c.BaseURL)
 	var resp <module>v1.<Domain>
 	return &resp, c.do(ctx, http.MethodPost, u, bytes.NewReader(body), &resp)
 }
 
 func (c *Client) Get<Domain>(ctx context.Context, req *<module>v1.Get<Domain>Request) (*<module>v1.<Domain>, error) {
-	u := fmt.Sprintf("%s/<module>/v1/%s", c.BaseURL, req.GetName())
+	u := fmt.Sprintf("%s/%s", c.BaseURL, req.GetName())
 	var resp <module>v1.<Domain>
 	return &resp, c.do(ctx, http.MethodGet, u, nil, &resp)
 }
 
-func (c *Client) List<Domain>s(ctx context.Context, req *<module>v1.List<Domain>sRequest) (*<module>v1.List<Domain>sResponse, error) {
+func (c *Client) List<Plural>(ctx context.Context, req *<module>v1.List<Plural>Request) (*<module>v1.List<Plural>Response, error) {
 	q := url.Values{}
 	if req.GetPageToken() != "" {
 		q.Set("page_token", req.GetPageToken())
 	}
-	u := fmt.Sprintf("%s/<module>/v1/%s/<domain>s?%s", c.BaseURL, req.GetParent(), q.Encode())
-	var resp <module>v1.List<Domain>sResponse
+	u := fmt.Sprintf("%s/<plural>?%s", c.BaseURL, q.Encode())
+	var resp <module>v1.List<Plural>Response
 	return &resp, c.do(ctx, http.MethodGet, u, nil, &resp)
 }
 
@@ -65,10 +66,15 @@ func (c *Client) Update<Domain>(ctx context.Context, req *<module>v1.Update<Doma
 	if err != nil {
 		return nil, err
 	}
-	q := url.Values{"update_mask": {joinPaths(req.GetUpdateMask().GetPaths())}}
-	u := fmt.Sprintf("%s/<module>/v1/%s?%s", c.BaseURL, req.Get<Domain>().GetName(), q.Encode())
+	q := url.Values{"update_mask": {strings.Join(req.GetUpdateMask().GetPaths(), ",")}}
+	u := fmt.Sprintf("%s/%s?%s", c.BaseURL, req.Get<Domain>().GetName(), q.Encode())
 	var resp <module>v1.<Domain>
 	return &resp, c.do(ctx, http.MethodPatch, u, bytes.NewReader(body), &resp)
+}
+
+func (c *Client) Delete<Domain>(ctx context.Context, req *<module>v1.Delete<Domain>Request) error {
+	u := fmt.Sprintf("%s/%s", c.BaseURL, req.GetName())
+	return c.do(ctx, http.MethodDelete, u, nil, nil)
 }
 
 func (c *Client) do(ctx context.Context, method, u string, body io.Reader, out any) error {
@@ -87,6 +93,9 @@ func (c *Client) do(ctx context.Context, method, u string, body io.Reader, out a
 	if resp.StatusCode >= 300 {
 		b, _ := io.ReadAll(resp.Body)
 		return fmt.Errorf("<module>: %s %s: %s: %s", method, u, resp.Status, b)
+	}
+	if out == nil {
+		return nil // Delete succeeds with HTTP 204 and no response body.
 	}
 	return json.UnmarshalRead(resp.Body, out)
 }

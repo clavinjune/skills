@@ -1,34 +1,39 @@
-// cmd/<binary>-cli/cmd/<domain>/<domain>_test.go — UNIT tests, no server,
-// no HTTP, no wire: newGetCmd/newCreateCmd/newUpdateCmd already take the
+// cmd/<binary>ctl/cmd/<domain>/<domain>_test.go — UNIT tests, no server,
+// no HTTP, no wire: command constructors already take the
 // pkg.<Domain>Client INTERFACE, so a hand-written fake (real deterministic
 // struct, no mocking framework — matches the project's "no mocks" rule)
 // stands in directly. Package is <domain>_test (external test package,
 // project convention) driving through the exported ProvideCommands entry
-// point and Commands.Get/Create/Update fields — never call the unexported
+// point and Commands.Get/Create/Edit/Delete fields — never call the unexported
 // newGetCmd etc. from a test.
 package <domain>_test
 
 import (
 	"bytes"
 	"context"
+	"errors"
 	"testing"
 
+	"github.com/spf13/cobra"
 	"github.com/stretchr/testify/require"
 
-	"<modulePath>/cmd/<binary>-cli/cmd/<domain>"
+	"<modulePath>/cmd/<binary>ctl/cmd/<domain>"
 	"<modulePath>/internal/cliutil"
 	<module>v1 "<modulePath>/pkg/<module>/v1"
 )
 
 func tableFormat() cliutil.OutputFormat { return cliutil.OutputTable }
 
+func noEdit(_ context.Context, data []byte) ([]byte, error) { return data, nil }
+
 // fakeClient implements pkg.<Domain>Client with per-method closures set
 // per test — a real implementation, not a mock/spy library.
 type fakeClient struct {
 	createFn func(context.Context, *<module>v1.Create<Domain>Request) (*<module>v1.<Domain>, error)
 	getFn    func(context.Context, *<module>v1.Get<Domain>Request) (*<module>v1.<Domain>, error)
-	listFn   func(context.Context, *<module>v1.List<Domain>sRequest) (*<module>v1.List<Domain>sResponse, error)
+	listFn   func(context.Context, *<module>v1.List<Plural>Request) (*<module>v1.List<Plural>Response, error)
 	updateFn func(context.Context, *<module>v1.Update<Domain>Request) (*<module>v1.<Domain>, error)
+	deleteFn func(context.Context, *<module>v1.Delete<Domain>Request) error
 }
 
 func (f *fakeClient) Create<Domain>(ctx context.Context, req *<module>v1.Create<Domain>Request) (*<module>v1.<Domain>, error) {
@@ -37,31 +42,118 @@ func (f *fakeClient) Create<Domain>(ctx context.Context, req *<module>v1.Create<
 func (f *fakeClient) Get<Domain>(ctx context.Context, req *<module>v1.Get<Domain>Request) (*<module>v1.<Domain>, error) {
 	return f.getFn(ctx, req)
 }
-func (f *fakeClient) List<Domain>s(ctx context.Context, req *<module>v1.List<Domain>sRequest) (*<module>v1.List<Domain>sResponse, error) {
+func (f *fakeClient) List<Plural>(ctx context.Context, req *<module>v1.List<Plural>Request) (*<module>v1.List<Plural>Response, error) {
 	return f.listFn(ctx, req)
 }
 func (f *fakeClient) Update<Domain>(ctx context.Context, req *<module>v1.Update<Domain>Request) (*<module>v1.<Domain>, error) {
 	return f.updateFn(ctx, req)
 }
 
+func (f *fakeClient) Delete<Domain>(ctx context.Context, req *<module>v1.Delete<Domain>Request) error {
+	return f.deleteFn(ctx, req)
+}
+
 func TestGetCmd_ByName(t *testing.T) {
 	t.Parallel()
 	c := &fakeClient{
 		getFn: func(_ context.Context, req *<module>v1.Get<Domain>Request) (*<module>v1.<Domain>, error) {
-			require.Equal(t, "<domain>s/1", req.GetName())
-			return &<module>v1.<Domain>{Name: "<domain>s/1", DisplayName: "Example"}, nil
+			require.Equal(t, "<plural>/1", req.GetName())
+			return &<module>v1.<Domain>{Name: "<plural>/1", DisplayName: "Example"}, nil
 		},
 	}
-	cmds := <domain>.ProvideCommands(c, tableFormat)
+	cmds := <domain>.ProvideCommands(c, tableFormat, noEdit)
 	out := &bytes.Buffer{}
 	cmds.Get.SetOut(out)
-	cmds.Get.SetArgs([]string{"<domain>s/1"})
+	cmds.Get.SetArgs([]string{"<plural>/1"})
 	require.NoError(t, cmds.Get.Execute())
 	require.Contains(t, out.String(), "Example")
 }
 
-// Add ByCmd_ListFollowsPagination / CreateCmd / UpdateCmd tests following
-// the same shape — see cmd/bookinfo-cli/cmd/author/commands_test.go and
-// .../book/commands_test.go in references/bookinfo-example.md for the
-// full worked set (list pagination-follow, required-flag validation,
-// error propagation, update-mask-only-changed-flags).
+func TestGetCmd_AllNamesListEveryPage(t *testing.T) {
+	for _, spelling := range []string{"<plural>", "<domain>", "<alias>"} {
+		t.Run(spelling, func(t *testing.T) {
+			calls := 0
+			c := &fakeClient{listFn: func(_ context.Context, req *<module>v1.List<Plural>Request) (*<module>v1.List<Plural>Response, error) {
+				calls++
+				if calls == 1 {
+					require.Empty(t, req.GetPageToken())
+					return &<module>v1.List<Plural>Response{<Plural>: []*<module>v1.<Domain>{{Name: "<plural>/1", DisplayName: "First"}}, NextPageToken: "next"}, nil
+				}
+				require.Equal(t, "next", req.GetPageToken())
+				return &<module>v1.List<Plural>Response{<Plural>: []*<module>v1.<Domain>{{Name: "<plural>/2", DisplayName: "Second"}}}, nil
+			}}
+			commands := <domain>.ProvideCommands(c, tableFormat, noEdit)
+			root := &cobra.Command{Use: "get"}
+			root.AddCommand(commands.Get)
+			out := &bytes.Buffer{}
+			root.SetOut(out)
+			root.SetArgs([]string{spelling})
+			require.NoError(t, root.Execute())
+			require.Equal(t, 2, calls)
+			require.Contains(t, out.String(), "First")
+			require.Contains(t, out.String(), "Second")
+		})
+	}
+}
+
+func TestEditCmd_OnlyChangedFields(t *testing.T) {
+	updated := false
+	c := &fakeClient{
+		getFn: func(_ context.Context, req *<module>v1.Get<Domain>Request) (*<module>v1.<Domain>, error) {
+			return &<module>v1.<Domain>{Name: req.GetName(), DisplayName: "Before"}, nil
+		},
+		updateFn: func(_ context.Context, req *<module>v1.Update<Domain>Request) (*<module>v1.<Domain>, error) {
+			updated = true
+			require.Equal(t, []string{"display_name"}, req.GetUpdateMask().GetPaths())
+			require.Equal(t, "After", req.Get<Domain>().GetDisplayName())
+			return req.Get<Domain>(), nil
+		},
+	}
+	editor := func(_ context.Context, data []byte) ([]byte, error) {
+		return bytes.ReplaceAll(data, []byte("Before"), []byte("After")), nil
+	}
+	cmd := <domain>.ProvideCommands(c, tableFormat, editor).Edit
+	cmd.SetOut(&bytes.Buffer{})
+	cmd.SetArgs([]string{"<plural>/1"})
+	require.NoError(t, cmd.Execute())
+	require.True(t, updated)
+}
+
+func TestEditCmd_NoChangeSkipsUpdate(t *testing.T) {
+	c := &fakeClient{getFn: func(_ context.Context, req *<module>v1.Get<Domain>Request) (*<module>v1.<Domain>, error) {
+		return &<module>v1.<Domain>{Name: req.GetName(), DisplayName: "Same"}, nil
+	}}
+	cmd := <domain>.ProvideCommands(c, tableFormat, noEdit).Edit
+	out := &bytes.Buffer{}
+	cmd.SetOut(out)
+	cmd.SetArgs([]string{"<plural>/1"})
+	require.NoError(t, cmd.Execute()) // A call to updateFn would panic.
+	require.Contains(t, out.String(), "no changes")
+}
+
+func TestDeleteCmd_RequiresNameAndPropagatesFailure(t *testing.T) {
+	want := errors.New("delete failed")
+	c := &fakeClient{deleteFn: func(_ context.Context, req *<module>v1.Delete<Domain>Request) error {
+		require.Equal(t, "<plural>/1", req.GetName())
+		return want
+	}}
+	cmd := <domain>.ProvideCommands(c, tableFormat, noEdit).Delete
+	cmd.SetArgs([]string{})
+	require.Error(t, cmd.Execute())
+	cmd = <domain>.ProvideCommands(c, tableFormat, noEdit).Delete
+	cmd.SetArgs([]string{"<plural>/1"})
+	require.ErrorIs(t, cmd.Execute(), want)
+}
+
+func TestExplainCmd_AllNamesAndField(t *testing.T) {
+	resource := <domain>.ProvideCommands(&fakeClient{}, tableFormat, noEdit).Resource
+	for _, spelling := range []string{"<plural>", "<domain>", "<alias>"} {
+		cmd := cliutil.NewExplainCmd(resource)
+		out := &bytes.Buffer{}
+		cmd.SetOut(out)
+		cmd.SetArgs([]string{spelling + ".display_name"})
+		require.NoError(t, cmd.Execute()) // No client method can be called.
+		require.Contains(t, out.String(), "display_name")
+		require.Contains(t, out.String(), "string")
+	}
+}

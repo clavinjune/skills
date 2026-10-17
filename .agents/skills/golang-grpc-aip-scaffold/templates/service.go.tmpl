@@ -114,6 +114,14 @@ func (s *service) Update{{.Domain}}(ctx context.Context, item *{{.module}}v1.{{.
 	return toProto(row), nil
 }
 
+func (s *service) Delete{{.Domain}}(ctx context.Context, name string) error {
+	id, err := pkg.Parse{{.Domain}}Name(name)
+	if err != nil {
+		return err
+	}
+	return s.repository.Delete{{.Domain}}(ctx, id)
+}
+
 // newID generates a UUIDv7 resource id (see skill Pitfalls: UUIDv7 for ids).
 func newID() string {
 	id, err := uuid.NewV7()

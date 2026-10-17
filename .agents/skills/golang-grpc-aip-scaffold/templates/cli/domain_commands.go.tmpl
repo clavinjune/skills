@@ -1,16 +1,18 @@
-// cmd/<binary>-cli/cmd/<domain>/commands.go — get/<domain> merges list+get
-// (kubectl-style, see Pitfalls), create/update apply their proto Request
-// directly. Every builder takes the pkg.<Domain>Client INTERFACE as a
-// parameter (not a concrete *client.Client) — this is what makes RunE
+// cmd/<binary>ctl/cmd/<domain>/commands.go — get/<domain> merges list+get
+// (kubectl-style, see Pitfalls). edit opens YAML and submits an Update
+// request with only changed mutable fields. Every builder takes the
+// pkg.<Domain>Client INTERFACE (not a concrete *client.Client), making RunE
 // unit-testable later: a test constructs a fake implementing the same
-// small interface and calls newGetCmd(fake, ...) directly, no server, no
+// small interface and calls ProvideCommands(fake, ...) directly, no server, no
 // HTTP, no wire tree. See templates/cli/domain_commands_test.go.tmpl.
 package <domain>
 
 import (
 	"context"
+	"fmt"
 
 	"github.com/spf13/cobra"
+	"google.golang.org/protobuf/types/known/fieldmaskpb"
 
 	"<modulePath>/internal/cliutil"
 	"<modulePath>/pkg"
@@ -19,9 +21,10 @@ import (
 
 func newGetCmd(c pkg.<Domain>Client, format func() cliutil.OutputFormat) *cobra.Command {
 	return &cobra.Command{
-		Use:   "<domain> [name]",
-		Short: "Get a <domain> by resource name, or list all if name is omitted",
-		Args:  cobra.MaximumNArgs(1),
+		Use:     resource.Plural + " [name]",
+		Aliases: resource.CommandAliases(),
+		Short:   "Get a <domain> by resource name, or list all if name is omitted",
+		Args:    cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ctx := cmd.Context()
 			if len(args) == 1 {
@@ -35,7 +38,7 @@ func newGetCmd(c pkg.<Domain>Client, format func() cliutil.OutputFormat) *cobra.
 			if err != nil {
 				return err
 			}
-			resp := &<module>v1.List<Domain>sResponse{<Domain>s: items}
+			resp := &<module>v1.List<Plural>Response{<Plural>: items}
 			return cliutil.PrintResult(cmd.OutOrStdout(), format(), resp, listTable{items}, listTable{items})
 		},
 	}
@@ -47,11 +50,11 @@ func listAll(ctx context.Context, c pkg.<Domain>Client) ([]*<module>v1.<Domain>,
 	var all []*<module>v1.<Domain>
 	pageToken := ""
 	for {
-		resp, err := c.List<Domain>s(ctx, &<module>v1.List<Domain>sRequest{PageToken: pageToken})
+		resp, err := c.List<Plural>(ctx, &<module>v1.List<Plural>Request{PageToken: pageToken})
 		if err != nil {
 			return nil, err
 		}
-		all = append(all, resp.Get<Domain>s()...)
+		all = append(all, resp.Get<Plural>()...)
 		if resp.GetNextPageToken() == "" {
 			return all, nil
 		}
@@ -62,9 +65,10 @@ func listAll(ctx context.Context, c pkg.<Domain>Client) ([]*<module>v1.<Domain>,
 func newCreateCmd(c pkg.<Domain>Client, format func() cliutil.OutputFormat) *cobra.Command {
 	var displayName string
 	cmd := &cobra.Command{
-		Use:   "<domain>",
-		Short: "Create a <domain>",
-		Args:  cobra.NoArgs,
+		Use:     resource.Plural,
+		Aliases: resource.CommandAliases(),
+		Short:   "Create a <domain>",
+		Args:    cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			req := &<module>v1.Create<Domain>Request{<Domain>: &<module>v1.<Domain>{DisplayName: displayName}}
 			resp, err := c.Create<Domain>(cmd.Context(), req)
@@ -79,19 +83,28 @@ func newCreateCmd(c pkg.<Domain>Client, format func() cliutil.OutputFormat) *cob
 	return cmd
 }
 
-func newUpdateCmd(c pkg.<Domain>Client, format func() cliutil.OutputFormat) *cobra.Command {
-	var displayName string
-	cmd := &cobra.Command{
-		Use:   "<domain> <name>",
-		Short: "Update a <domain> by resource name",
-		Args:  cobra.ExactArgs(1),
+func newEditCmd(c pkg.<Domain>Client, format func() cliutil.OutputFormat, editor cliutil.Editor) *cobra.Command {
+	return &cobra.Command{
+		Use:     resource.Plural + " <name>",
+		Aliases: resource.CommandAliases(),
+		Short:   "Edit a <domain> in YAML using your editor",
+		Args:    cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			// Only the flags the caller actually set go into the mask —
-			// see book's update command for the multi-flag version of
-			// this pattern (Changed()-gated per field).
+			current, err := c.Get<Domain>(cmd.Context(), &<module>v1.Get<Domain>Request{Name: args[0]})
+			if err != nil {
+				return err
+			}
+			edited, paths, err := cliutil.EditResource(cmd.Context(), current, pkg.Mutable<Domain>Paths, editor)
+			if err != nil {
+				return err
+			}
+			if len(paths) == 0 {
+				_, err := fmt.Fprintln(cmd.OutOrStdout(), "Edit cancelled: no changes.")
+				return err
+			}
 			req := &<module>v1.Update<Domain>Request{
-				<Domain>:   &<module>v1.<Domain>{Name: args[0], DisplayName: displayName},
-				UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"display_name"}},
+				<Domain>:   edited.(*<module>v1.<Domain>),
+				UpdateMask: &fieldmaskpb.FieldMask{Paths: paths},
 			}
 			resp, err := c.Update<Domain>(cmd.Context(), req)
 			if err != nil {
@@ -100,7 +113,20 @@ func newUpdateCmd(c pkg.<Domain>Client, format func() cliutil.OutputFormat) *cob
 			return cliutil.PrintResult(cmd.OutOrStdout(), format(), resp, table{resp}, table{resp})
 		},
 	}
-	cmd.Flags().StringVar(&displayName, "display-name", "", "new <domain> display name")
-	_ = cmd.MarkFlagRequired("display-name")
-	return cmd
+}
+
+func newDeleteCmd(c pkg.<Domain>Client) *cobra.Command {
+	return &cobra.Command{
+		Use:     resource.Plural + " <name>",
+		Aliases: resource.CommandAliases(),
+		Short:   "Delete a <domain> by resource name",
+		Args:    cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			if err := c.Delete<Domain>(cmd.Context(), &<module>v1.Delete<Domain>Request{Name: args[0]}); err != nil {
+				return err
+			}
+			_, err := fmt.Fprintf(cmd.OutOrStdout(), "%s deleted\n", args[0])
+			return err
+		},
+	}
 }

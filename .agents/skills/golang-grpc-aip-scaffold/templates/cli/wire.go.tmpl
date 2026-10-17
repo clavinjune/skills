@@ -9,10 +9,10 @@ import (
 	"<modulePath>/pkg/client"
 )
 
-// Wire is the single top-level CLI injector. c and format are passed
+// Wire is the single top-level CLI injector. c, format, and editor are passed
 // through as-is — same passthrough shape internal/wire.go uses for
-// *sql.DB. Run `go tool wire ./cmd/<binary>-cli/cmd` (or `make wire`) to
+// *sql.DB. Run `go tool wire ./cmd/<binary>ctl/cmd` (or `make wire`) to
 // regenerate wire_gen.go.
-func Wire(c *client.Client, format func() cliutil.OutputFormat) *Dependency {
+func Wire(c *client.Client, format func() cliutil.OutputFormat, editor cliutil.Editor) *Dependency {
 	panic(wire.Build(ProviderSet))
 }

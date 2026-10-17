@@ -5,6 +5,12 @@ use as ground truth if a template placeholder is ambiguous. Book is nested (`aut
 books/{book}`), so it also demonstrates the AIP-159 wildcard-parent and parent-name-reuse
 patterns; Author is the top-level domain these both build on.
 
+CLI excerpts below are adapted to this skill's `<binary>ctl` naming, resource aliases,
+and get/create/edit/delete/explain conventions. The upstream example is the architectural
+reference; `templates/cli/` supplies the current command constructors and shared helpers.
+For bookinfo, use `authors`/`author`/`au` and `books`/`book`/`bo`. All three spellings work
+under every verb; `get books` lists and `get books <full-resource-name>` gets one.
+
 ## pkg/author.go (name helpers + interfaces, real code)
 ```go
 package pkg
@@ -278,15 +284,16 @@ plugins:
     opt: paths=source_relative
 ```
 
-## CLI: cmd/bookinfo-cli/cmd/root.go (real code — lazy-client wiring)
+## CLI: cmd/bookinfoctl/cmd/root.go (adapted example — lazy-client wiring)
 ```go
-// Package cmd is the top-level bookinfo-cli command tree: the shared
-// output-format flag, the get/create/update verb parents, and wire-based
-// assembly of each domain's subcommands (cmd/bookinfo-cli/cmd/author,
-// cmd/bookinfo-cli/cmd/book) against a single shared pkg/client.Client.
+// Package cmd is the top-level bookinfoctl command tree: the shared
+// output-format flag, get/create/edit/delete/explain commands, and wire-based
+// assembly of each domain's subcommands (cmd/bookinfoctl/cmd/author,
+// cmd/bookinfoctl/cmd/book) against a single shared pkg/client.Client.
 package cmd
 
 import (
+	"context"
 	"net/http"
 
 	"github.com/spf13/cobra"
@@ -310,7 +317,7 @@ func NewRootCmd(httpClient *http.Client) *cobra.Command {
 		output string
 	)
 	root := &cobra.Command{
-		Use:   "bookinfo-cli",
+		Use:   "bookinfoctl",
 		Short: "kubectl-style CLI for bookinfo-server",
 	}
 	root.PersistentFlags().StringVar(&addr, "addr", "http://localhost:8080", "bookinfo-server base URL")
@@ -320,17 +327,22 @@ func NewRootCmd(httpClient *http.Client) *cobra.Command {
 
 	getCmd := &cobra.Command{Use: "get", Short: "Get or list a resource"}
 	createCmd := &cobra.Command{Use: "create", Short: "Create a resource"}
-	updateCmd := &cobra.Command{Use: "update", Short: "Update a resource"}
-	root.AddCommand(getCmd, createCmd, updateCmd)
+	editCmd := &cobra.Command{Use: "edit", Short: "Edit a resource in YAML using your editor"}
+	deleteCmd := &cobra.Command{Use: "delete", Short: "Delete a resource by name"}
 
 	client := newLazyClient(httpClient)
-	dep := Wire(client, format)
-	dep.Author.Register(getCmd, createCmd, updateCmd)
-	dep.Book.Register(getCmd, createCmd, updateCmd)
+	editor := cliutil.Editor(func(ctx context.Context, data []byte) ([]byte, error) {
+		return cliutil.OpenEditor(ctx, data, root.InOrStdin(), root.OutOrStdout(), root.ErrOrStderr())
+	})
+	dep := Wire(client, format, editor)
+	dep.Author.Register(getCmd, createCmd, editCmd, deleteCmd)
+	dep.Book.Register(getCmd, createCmd, editCmd, deleteCmd)
+	resources := []cliutil.Resource{dep.Author.Resource, dep.Book.Resource}
+	root.AddCommand(getCmd, createCmd, editCmd, deleteCmd, cliutil.NewExplainCmd(resources...))
 
 	root.PersistentPreRunE = func(cmd *cobra.Command, _ []string) error {
 		client.BaseURL = addr
-		return nil
+		return cliutil.ValidateResources(resources)
 	}
 	return root
 }
@@ -340,15 +352,15 @@ func newLazyClient(httpClient *http.Client) *client.Client {
 }
 ```
 
-## CLI: cmd/bookinfo-cli/cmd/provider.go (real code — top-level CLI wire aggregation)
+## CLI: cmd/bookinfoctl/cmd/provider.go (real code — top-level CLI wire aggregation)
 ```go
 package cmd
 
 import (
 	"github.com/google/wire"
 
-	"github.com/clavinjune/golang-scaffold/cmd/bookinfo-cli/cmd/author"
-	"github.com/clavinjune/golang-scaffold/cmd/bookinfo-cli/cmd/book"
+	"github.com/clavinjune/golang-scaffold/cmd/bookinfoctl/cmd/author"
+	"github.com/clavinjune/golang-scaffold/cmd/bookinfoctl/cmd/book"
 	"github.com/clavinjune/golang-scaffold/pkg"
 	"github.com/clavinjune/golang-scaffold/pkg/client"
 )
@@ -382,7 +394,7 @@ func ProvideDependency(authorCommands *author.Commands, bookCommands *book.Comma
 }
 ```
 
-## CLI: cmd/bookinfo-cli/cmd/author/commands.go (real code — RunE takes the interface, testable)
+## CLI: cmd/bookinfoctl/cmd/author/commands.go (adapted example — RunE takes the interface, testable)
 ```go
 // newGetCmd handles both "get author" (list all) and "get author <name>"
 // (get one), kubectl-style. c is pkg.AuthorClient, the INTERFACE — never
@@ -390,7 +402,8 @@ func ProvideDependency(authorCommands *author.Commands, bookCommands *book.Comma
 // a fakeClient and call cmd.Execute() with no server, no HTTP, no wire.
 func newGetCmd(c pkg.AuthorClient, format func() cliutil.OutputFormat) *cobra.Command {
 	return &cobra.Command{
-		Use:   "author [name]",
+		Use:   resource.Plural + " [name]", // authors
+		Aliases: resource.CommandAliases(), // singular author + short alias au
 		Short: "Get an author by resource name, or list all authors if name is omitted",
 		Args:  cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
@@ -413,7 +426,7 @@ func newGetCmd(c pkg.AuthorClient, format func() cliutil.OutputFormat) *cobra.Co
 }
 ```
 
-## CLI: cmd/bookinfo-cli/cmd/author/commands_test.go (real code — RunE unit test, no server)
+## CLI: cmd/bookinfoctl/cmd/author/commands_test.go (adapted example — RunE unit test, no server)
 ```go
 // package author_test — external test package convention, driving
 // through the exported author.ProvideCommands(...) entry point, never the
@@ -427,7 +440,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	"github.com/clavinjune/golang-scaffold/cmd/bookinfo-cli/cmd/author"
+	"github.com/clavinjune/golang-scaffold/cmd/bookinfoctl/cmd/author"
 	"github.com/clavinjune/golang-scaffold/internal/cliutil"
 	bookinfov1 "github.com/clavinjune/golang-scaffold/pkg/bookinfo/v1"
 )
@@ -439,8 +452,8 @@ func tableFormat() cliutil.OutputFormat { return cliutil.OutputTable }
 // convention. Each field is a plain closure a test wires up per case.
 type fakeClient struct {
 	getFn func(context.Context, *bookinfov1.GetAuthorRequest) (*bookinfov1.Author, error)
-	// createFn/listFn/updateFn omitted here for brevity — see the full
-	// project file for all four.
+	// createFn/listFn/updateFn/deleteFn omitted here for brevity — see
+	// templates/cli/domain_commands_test.go.tmpl for the complete fake.
 }
 
 func (f *fakeClient) GetAuthor(ctx context.Context, req *bookinfov1.GetAuthorRequest) (*bookinfov1.Author, error) {
@@ -455,7 +468,8 @@ func TestGetCmd_ByName(t *testing.T) {
 			return &bookinfov1.Author{Name: "authors/1", DisplayName: "Jane"}, nil
 		},
 	}
-	cmds := author.ProvideCommands(c, tableFormat)
+	editor := func(_ context.Context, data []byte) ([]byte, error) { return data, nil }
+	cmds := author.ProvideCommands(c, tableFormat, editor)
 	out := &bytes.Buffer{}
 	cmds.Get.SetOut(out)
 	cmds.Get.SetArgs([]string{"authors/1"})

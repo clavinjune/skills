@@ -1,4 +1,4 @@
-// cmd/<binary>-cli/cmd/<domain>/provider.go — wires this domain's CLI
+// cmd/<binary>ctl/cmd/<domain>/provider.go — wires this domain's CLI
 // subcommand: pkg.<Domain>Client (bound by the top-level cmd.ProviderSet
 // to the shared *client.Client) -> Commands (the cobra builders).
 package <domain>
@@ -9,30 +9,44 @@ import (
 
 	"<modulePath>/internal/cliutil"
 	"<modulePath>/pkg"
+	<module>v1 "<modulePath>/pkg/<module>/v1"
 )
 
-var ProviderSet = wire.NewSet(
-	ProvideCommands,
+var (
+	ProviderSet = wire.NewSet(ProvideCommands)
+	resource    = cliutil.Resource{
+		Singular:    "<domain>",
+		Plural:      "<plural>",
+		Aliases:     []string{"<alias>"},
+		Description: "<Domain> resource",
+		Descriptor:  (&<module>v1.<Domain>{}).ProtoReflect().Descriptor(),
+	}
 )
 
 // Commands holds the built cobra commands for this domain, ready to be
-// added under the shared get/create/update verb parents.
+// added under the shared get/create/edit/delete verb parents. Resource
+// also registers this domain with the shared, offline explain command.
 type Commands struct {
-	Get    *cobra.Command
-	Create *cobra.Command
-	Update *cobra.Command
+	Resource cliutil.Resource
+	Get      *cobra.Command
+	Create   *cobra.Command
+	Edit     *cobra.Command
+	Delete   *cobra.Command
 }
 
-func (c *Commands) Register(getCmd, createCmd, updateCmd *cobra.Command) {
+func (c *Commands) Register(getCmd, createCmd, editCmd, deleteCmd *cobra.Command) {
 	getCmd.AddCommand(c.Get)
 	createCmd.AddCommand(c.Create)
-	updateCmd.AddCommand(c.Update)
+	editCmd.AddCommand(c.Edit)
+	deleteCmd.AddCommand(c.Delete)
 }
 
-func ProvideCommands(client pkg.<Domain>Client, format func() cliutil.OutputFormat) *Commands {
+func ProvideCommands(client pkg.<Domain>Client, format func() cliutil.OutputFormat, editor cliutil.Editor) *Commands {
 	return &Commands{
-		Get:    newGetCmd(client, format),
-		Create: newCreateCmd(client, format),
-		Update: newUpdateCmd(client, format),
+		Resource: resource,
+		Get:      newGetCmd(client, format),
+		Create:   newCreateCmd(client, format),
+		Edit:     newEditCmd(client, format, editor),
+		Delete:   newDeleteCmd(client),
 	}
 }

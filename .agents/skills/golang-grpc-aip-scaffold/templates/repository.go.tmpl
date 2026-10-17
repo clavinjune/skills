@@ -69,3 +69,14 @@ func (r *repository) Update{{.Domain}}(ctx context.Context, item *sqlc.{{.Domain
 	}
 	return &row, nil
 }
+
+func (r *repository) Delete{{.Domain}}(ctx context.Context, id string) error {
+	rows, err := r.queries.Delete{{.Domain}}(ctx, id)
+	if err != nil {
+		return err
+	}
+	if rows == 0 {
+		return fmt.Errorf("%w: {{.domain}} %q", pkg.ErrNotFound, id)
+	}
+	return nil
+}

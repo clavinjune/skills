@@ -7,11 +7,14 @@ description: Use when scaffolding Go service w/ gRPC/AIP, sqlc, wire DI.
 
 Canonical worked example: `github.com/clavinjune/golang-scaffold`'s `bookinfo` domain (Books
 nested under Authors) — a real, fully built and tested project, not a hypothetical. Read
-`references/bookinfo-example.md` for full real code if the `templates/*.tmpl` files aren't
-enough context. `templates/*.tmpl` are literal Go `text/template` files: fill in `Domain`
+`references/bookinfo-example.md` for worked code if the `templates/*.tmpl` files aren't
+enough context. Backend `.tmpl` files use Go `text/template`; CLI templates use angle-bracket
+placeholders to substitute. Fill in `Domain`
 (PascalCase singular, e.g. `Book`), `domain` (lowercase singular, e.g. `book`), `Plural`/`plural`
 (e.g. `Books`/`books`), `module`/`Module` (proto package + Go import alias, e.g. `bookinfo`), and
-`modulePath` (Go module path, e.g. `github.com/clavinjune/golang-scaffold`). CLI-specific
+`modulePath` (Go module path, e.g. `github.com/clavinjune/golang-scaffold`). For CLI templates,
+also choose `binary` (e.g. `bookinfo`) and a unique short `alias` (e.g. `bo` for books,
+`au` for authors). Use explicit plural forms, including irregular plurals. CLI-specific
 templates live under `templates/cli/` — see the CLI scaffolding section below for which template
 maps to which file.
 
@@ -52,13 +55,13 @@ maps to which file.
 │       └── *_test.go        # testify/suite or table-driven; real sqlite + httptest, no mocks
 └── cmd/
     ├── <binary>-server/main.go   # composition root: opens DB, calls internal.Wire(db), registers handlers
-    └── <binary>-cli/             # optional Cobra CLI client (see CLI scaffolding section)
+    └── <binary>ctl/              # optional Cobra CLI client (see CLI scaffolding section)
 ```
 
 ## Steps
 
 1. **Confirm parameters with the user before generating anything**: Go module path, first
-   domain/resource name (e.g. `invoice`), whether SQLite (modernc.org/sqlite, no CGo) or another
+   domain/resource name (e.g. `invoice`, including its plural and CLI alias), whether SQLite (modernc.org/sqlite, no CGo) or another
    DB, transport (plain HTTP+JSON vs real gRPC), whether observability is wanted from day one.
    Don't assume — these are architecturally significant and belong in an ADR-0001, not silently
    copied from a prior project.
@@ -87,15 +90,19 @@ cross-check against `references/bookinfo-example.md` if a template placeholder i
 1. **Proto** — `blueprint/proto/<module>/v1/<domain>.proto` from `templates/domain.proto.tmpl`:
    `google.api.resource` annotation (`type`/`pattern`/`singular`/`plural`), `field_behavior` on
    every field (`IDENTIFIER`/`REQUIRED`/`OUTPUT_ONLY`/`OPTIONAL`), AIP-142 `create_time`/
-   `update_time` (grill first — see Pitfalls), standard verbs `Create/Get/List/Update<X>`
-   (AIP-131/132/133/134). For a **nested** resource, `parent` goes on `Create<X>Request` /
+   `update_time` (grill first — see Pitfalls), standard verbs `Create/Get/List/Update/Delete<X>`
+   (AIP-131/132/133/134/135). Delete takes a required resource name; real gRPC returns
+   `google.protobuf.Empty`, plain HTTP returns 204 with no body. For a **nested** resource, `parent` goes on `Create<X>Request` /
    `List<X>Request` instead of being embedded in `name`.
 2. **SQL** — add a table to `blueprint/sqlc/schema.sql` (`id TEXT PRIMARY KEY`, `created_at`/
    `updated_at TEXT` with `strftime` defaults if timestamps are in scope) and
-   `Create/Get/List/Update<X>` queries to `blueprint/sqlc/query.sql` (List uses
+   `Create/Get/List/Update/Delete<X>` queries to `blueprint/sqlc/query.sql` (List uses
    `WHERE id > ? ORDER BY id LIMIT ?`, never OFFSET). If nested, add the parent's FK column and,
    if cross-parent listing is needed, a second `ListAll<X>` query with no parent filter
-   (AIP-159 wildcard — see Pitfalls).
+   (AIP-159 wildcard — see Pitfalls). Delete uses `:execrows`; zero affected rows maps to
+   `pkg.ErrNotFound`. Nested Get/Update/Delete must constrain both parent ID and resource ID.
+   Reject deletion of a parent with children as a failed precondition unless cascading deletion
+   is an explicit domain requirement; do not silently add cascades or soft deletion.
 3. Run codegen: `buf generate && sqlc generate` (or the project's `make` targets for both).
 4. **`pkg/<domain>.go`** from `templates/pkg_domain.go.tmpl`: `Format<Domain>Name`/
    `Parse<Domain>Name`, `<Domain>Handler`/`<Domain>Service`/`<Domain>Repository` interfaces,
@@ -115,15 +122,17 @@ cross-check against `references/bookinfo-example.md` if a template placeholder i
    `<domain>_test` (external test package), table-driven, real `:memory:` SQLite +
    `httptest.NewServer` (or `bufconn` for gRPC) — no mocks.
 10. **If the project has a CLI**: add the full per-domain CLI package
-    `cmd/<binary>-cli/cmd/<domain>/{provider,commands,table}.go` + its `<domain>_test.go` (see CLI
-    scaffolding below) — a domain's CLI surface is a whole package, not a single file, mirroring
+    `cmd/<binary>ctl/cmd/<domain>/{provider,commands,table}.go` + its `<domain>_test.go` (see CLI
+    scaffolding below). Register its singular/plural/aliases once, wire get/create/edit/delete,
+    and add its descriptor to explain. A domain's CLI surface is a whole package, mirroring
     the server side's `internal/<domain>/` shape.
 11. **Update `blueprint/`-adjacent docs** if the project keeps an ADR/README describing the
     resource list — don't let it silently drift out of sync with what `buf generate` actually
     emits.
 
-## CLI scaffolding (Cobra, `<binary> <verb> <resource>`, HTTP client abstraction, wired DI)
+## CLI scaffolding (Cobra, `<binary>ctl <verb> <resource>`, HTTP client abstraction, wired DI)
 
+Name the CLI binary `<binary>ctl` (e.g. `bookinfoctl`) and place it in `cmd/<binary>ctl/`.
 When the project also ships a CLI client, use **Cobra** in a `kubectl`-style `<verb> <resource>`
 tree — not `<resource> <verb>`. This matches how `kubectl`/`gh`/`docker` read as natural language
 ("get pockets", "create pocket") and groups commands by action across resources rather than by
@@ -131,30 +140,57 @@ resource. The CLI mirrors the server's architecture end to end: one package per 
 and a real HTTP client abstraction living in `pkg/` — not a flat `cmd` package with hand-rolled
 per-command HTTP calls.
 
+The public verbs are **get, create, edit, delete, explain**. `edit` replaces the old CLI
+`update` verb, but submits the existing AIP Update RPC/PATCH internally. Every resource has
+an explicit **plural**, **singular**, and at least one unique **short alias**. Canonical Cobra
+`Use` is plural; `Aliases` contains the singular and short forms. Define these once in the
+domain's `cliutil.Resource` metadata and reuse them across every verb, including explain.
+Validate collisions across resources at root execution; do not infer plurals by appending `s`.
+
+```sh
+bookinfoctl get books                         # List all books, auto-paginated
+bookinfoctl get book                          # Same list
+bookinfoctl get bo                            # Same list
+bookinfoctl get bo authors/<author-id>/books/<book-id>  # Get one
+bookinfoctl create book --author=authors/<author-id> --display-name="Earthsea"
+bookinfoctl edit books authors/<author-id>/books/<book-id>  # Open YAML editor
+bookinfoctl delete bo authors/<author-id>/books/<book-id>
+bookinfoctl explain books                     # Local resource schema
+bookinfoctl explain bo.display_name           # Local field schema
+```
+
+`get <resource>` with **zero names always lists**, regardless of plural/singular/alias spelling;
+one full AIP resource name gets one item. More than one name is an argument error in this scaffold.
+`edit` and `delete` require exactly one full resource name. An omitted name never implies a
+bulk edit/delete. Resource aliases affect command routing only, not AIP names or API paths.
+
 ### CLI directory shape
 ```
 pkg/
 ├── <domain>.go                  # add <Domain>Client interface here, alongside Service/Repository
 │                                  # (templates/cli/client_domain.go.tmpl)
 └── client/
-    └── <module>.go               # ONE struct implementing every domain's <Domain>Client over HTTP
-                                    # (templates/cli/pkg_client.go.tmpl)
+    ├── <module>.go               # ONE HTTP client (templates/cli/pkg_client.go.tmpl)
+    └── <module>_test.go          # HTTP contract tests (templates/cli/pkg_client_test.go.tmpl)
 internal/
 └── cliutil/
-    └── cliutil.go                 # OutputFormat + Tabler/Namer + PrintResult, shared by every
-                                     # domain's cmd package (templates/cli/cliutil.go.tmpl)
-cmd/<binary>-cli/
+    ├── cliutil.go                 # OutputFormat + Tabler/Namer + PrintResult
+    ├── resource.go                # Resource metadata + alias collision checks
+    ├── edit.go                    # Editor process, YAML decoding, changed-field masks
+    ├── explain.go                 # Offline protobuf schema lookup
+    └── edit_test.go               # Shared editor/schema tests (matching templates/cli/*.tmpl)
+cmd/<binary>ctl/
 ├── main.go                       # calls cmd.NewRootCmd(nil).Execute()
 └── cmd/
-    ├── root.go                    # NewRootCmd: verb parents (get/create/update), lazily-addressed
+    ├── root.go                    # NewRootCmd: get/create/edit/delete + offline explain, lazily-addressed
     │                                shared client, wires + registers every domain (templates/cli/root.go.tmpl)
     ├── provider.go                 # top-level Dependency{<Domain>, ...} + ProviderSet aggregate
     │                                (templates/cli/provider.go.tmpl)
     ├── wire.go / wire_gen.go        # //go:build wireinject injector, same passthrough shape as
     │                                internal/wire.go (templates/cli/wire.go.tmpl)
     └── <domain>/                    # one CLI package per domain — mirrors internal/<domain>/
-        ├── provider.go               # ProviderSet + Commands{Get,Create,Update} (templates/cli/domain_provider.go.tmpl)
-        ├── commands.go                # newGetCmd/newCreateCmd/newUpdateCmd, all take the
+        ├── provider.go               # Resource metadata + ProviderSet + Commands{Get,Create,Edit,Delete}
+        ├── commands.go                # newGetCmd/newCreateCmd/newEditCmd/newDeleteCmd, all take the
         │                              pkg.<Domain>Client INTERFACE as a parameter — this is what
         │                              makes RunE testable (templates/cli/domain_commands.go.tmpl)
         ├── table.go                   # table/listTable wrapper types implementing cliutil.Tabler/Namer
@@ -162,11 +198,38 @@ cmd/<binary>-cli/
                                         no server, no HTTP (templates/cli/domain_commands_test.go.tmpl)
 ```
 
-Command tree shape: `<binary>-cli get pocket <name>`, `<binary>-cli create pocket
---display-name=...`, `<binary>-cli update pocket <name> --display-name=...`. Each verb is a
-parent command with one subcommand added per domain — adding a domain means one `Register(...)`
-call in `root.go` and one `ProviderSet` entry in `provider.go`, not a new verb. There is no
-separate `list` verb — see the get/list merge pitfall below.
+Command tree shape: `<binary>ctl get <plural> [name]`, `create <plural> --display-name=...`,
+`edit <plural> <name>`, `delete <plural> <name>`, `explain <plural>[.<field>...]`.
+Get/create/edit/delete have one subcommand per domain; explain resolves resource aliases and dotted
+field paths through the shared descriptor registry. Adding a domain means one `Register(...)`
+call and one resource registry entry in `root.go`, plus its `ProviderSet`/client binding in
+`provider.go`. There is no separate `list` or `update` CLI verb.
+
+### Editor, delete, and explain behavior
+
+- Copy `templates/cli/{resource,edit,explain,edit_test}.go.tmpl` into `internal/cliutil/` once.
+  Pass a typed `cliutil.Editor` through the top-level Wire injector into `ProvideCommands`;
+  root binds terminal streams, while tests inject an editor function without launching a process.
+- `edit` fetches the current resource, serializes YAML using protobuf JSON conventions with
+  snake_case field names, then opens `$EDITOR` (fallback `$VISUAL`, then `vi`). The template
+  accepts an executable path/name; use a wrapper executable for editor arguments such as `code --wait`.
+  Decode one YAML document back into the same proto type. Reject unknown fields, malformed values,
+  and changes to fields outside `pkg.Mutable<Domain>Paths`, including name and output-only timestamps.
+  Compute the update mask from actual changes, including explicit clears. Empty content cancels;
+  unchanged content skips Update. The supplied helper supports top-level masks (message/list/map
+  changes replace the whole field); nested leaf masks require corresponding service support.
+- `delete` calls the proto-shaped client's Delete method. Implement it end-to-end in proto,
+  handler, service, repository, SQL, and client; successful HTTP 204 responses are not JSON-decoded.
+- `explain` works offline from compiled proto descriptors and accepts plural, singular, or alias
+  plus an optional dotted field path (`bo.display_name`). It shows fields and types, and comments
+  when source locations are available. If full prose is needed, retain source information in a
+  descriptor set generated from `blueprint/`; Go-generated descriptors may omit comments.
+- The client template matches the top-level HTTP handler routes. For nested resources, adapt
+  Create/List URLs to the request's parent and scope their queries; Get/Update/Delete use the full
+  resource name. Keep any API base-path prefix consistent on both client and server.
+- Test all resource spellings, get/list dispatch and pagination, editor cancellation/no-op,
+  invalid/immutable edits, changed-only masks, required delete names, delete not-found/error
+  propagation and HTTP 204 handling, and offline explain/unknown field errors.
 
 ### `pkg.<Domain>Client` — proto-shaped, not a `Service`-lookalike
 
@@ -186,14 +249,15 @@ in `pkg/`, matching the existing convention that `pkg/` holds cross-consumer con
 ### Wiring CLI subcommands with `wire`, same shape as the server
 
 Once CLI commands depend on interfaces instead of a concrete client, the exact same wire pattern
-used for the server applies: each domain's `cmd/<binary>-cli/cmd/<domain>/provider.go` exposes a
-`ProviderSet` + `Commands` struct; the top-level `cmd/<binary>-cli/cmd/provider.go` aggregates
+used for the server applies: each domain's `cmd/<binary>ctl/cmd/<domain>/provider.go` exposes a
+`ProviderSet` + `Commands` struct; the top-level `cmd/<binary>ctl/cmd/provider.go` aggregates
 every domain's `ProviderSet` plus a `provide<Domain>Client(c *client.Client) pkg.<Domain>Client`
 identity-bind function per domain (`wire.Bind` alone can't resolve wire's pass-through injector
 argument to an interface — a tiny identity function stands in). `wire.go` declares the
-`//go:build wireinject` injector signature; `go tool wire ./cmd/<binary>-cli/cmd` regenerates
-`wire_gen.go`. Adding domain N+1 means: one new package, one field on `Dependency`, one
-`ProviderSet`/bind-function pair — nothing else changes.
+`//go:build wireinject` injector signature; `go tool wire ./cmd/<binary>ctl/cmd` regenerates
+`wire_gen.go`. The injector also passes the shared `cliutil.Editor` into each domain's
+`ProvideCommands`. Adding domain N+1 means one new package, one field on `Dependency`, one
+`ProviderSet`/bind-function pair, command registration, and one explain resource registry entry.
 
 **Ordering wrinkle vs. the server's wire.go**: Cobra needs every subcommand already added to the
 tree before it parses args (routing walks already-added children), but `--addr` isn't known
@@ -271,8 +335,8 @@ subcommands need to exist in the tree first for cobra to route to them at all.
 - **`get`/`list` verb merge**: don't ship separate `get` (get-one) and `list` (list-all) verb
   parents — merge into a single `get <domain> [name]`, matching kubectl's own `get pods` (list) /
   `get pod <name>` (get-one). Dispatch on arg count (`cobra.MaximumNArgs(1)`): 0 args → list-all
-  helper (auto-paginates internally), 1 arg → get-by-name. Stick with the bare singular resource
-  name for the `Use` field — no singular/plural alias dance, that's purely cosmetic.
+  helper (auto-paginates internally), 1 arg → get-by-name. Use the plural in `Use` and accept
+  singular + short aliases from the shared resource metadata on every verb.
 - **Output formats — kubectl-style `-o table|wide|json|yaml|name`**: don't hand-roll a single
   JSON-only `print()`. Build `printResult(w, format, v, table, names)` in the CLI package:
   `json`/`yaml` always marshal the raw proto response value (yaml.v3 doesn't know proto's `json`
@@ -293,7 +357,7 @@ subcommands need to exist in the tree first for cobra to route to them at all.
 - **Config source split by binary role**: long-running servers (`cmd/*-server`) take ALL runtime
   config from env vars (no `flag` package — servers are launched by process
   managers/containers, where env vars are the native injection mechanism). Interactive clients
-  (`cmd/*-cli`) use cobra flags instead (a human is typing directly, so `--help`/discoverability
+  (`cmd/*ctl`) use cobra flags instead (a human is typing directly, so `--help`/discoverability
   matter). Don't mix the two within one binary.
 - **RunE must be testable — take the interface as a parameter, not a closed-over concrete
   client.** `newGetCmd(c pkg.<Domain>Client, format func() cliutil.OutputFormat) *cobra.Command`
@@ -305,7 +369,7 @@ subcommands need to exist in the tree first for cobra to route to them at all.
   end-to-end smoke cases. See `templates/cli/domain_commands_test.go.tmpl`.
 - **CLI test files use the external `_test` package, same as the server side.** `package
   <domain>_test`, driving through the exported `<domain>.ProvideCommands(...)` entry point and
-  `Commands.Get/Create/Update` fields — never reach into unexported `newGetCmd` from a test; if a
+  `Commands.Get/Create/Edit/Delete` fields — never reach into unexported `newGetCmd` from a test; if a
   test needs it, that's the signal the constructor should be exported or the test should go
   through `ProvideCommands` instead.
 

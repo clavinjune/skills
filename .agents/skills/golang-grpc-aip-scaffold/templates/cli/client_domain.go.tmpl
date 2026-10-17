@@ -7,6 +7,7 @@
 type <Domain>Client interface {
 	Create<Domain>(ctx context.Context, req *<module>v1.Create<Domain>Request) (*<module>v1.<Domain>, error)
 	Get<Domain>(ctx context.Context, req *<module>v1.Get<Domain>Request) (*<module>v1.<Domain>, error)
-	List<Domain>s(ctx context.Context, req *<module>v1.List<Domain>sRequest) (*<module>v1.List<Domain>sResponse, error)
+	List<Plural>(ctx context.Context, req *<module>v1.List<Plural>Request) (*<module>v1.List<Plural>Response, error)
 	Update<Domain>(ctx context.Context, req *<module>v1.Update<Domain>Request) (*<module>v1.<Domain>, error)
+	Delete<Domain>(ctx context.Context, req *<module>v1.Delete<Domain>Request) error
 }

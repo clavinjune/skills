@@ -25,6 +25,7 @@ func (h *handler) Register(mux *http.ServeMux) {
 	mux.HandleFunc("GET /{{.plural}}/{ {{- .domain -}} }", h.get{{.Domain}})
 	mux.HandleFunc("GET /{{.plural}}", h.list{{.Plural}})
 	mux.HandleFunc("PATCH /{{.plural}}/{ {{- .domain -}} }", h.update{{.Domain}})
+	mux.HandleFunc("DELETE /{{.plural}}/{ {{- .domain -}} }", h.delete{{.Domain}})
 }
 
 func (h *handler) create{{.Domain}}(w http.ResponseWriter, r *http.Request) {
@@ -81,4 +82,13 @@ func (h *handler) update{{.Domain}}(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	_ = httpjson.Write(w, http.StatusOK, resp)
+}
+
+func (h *handler) delete{{.Domain}}(w http.ResponseWriter, r *http.Request) {
+	name := pkg.Format{{.Domain}}Name(r.PathValue("{{.domain}}"))
+	if err := h.service.Delete{{.Domain}}(r.Context(), name); err != nil {
+		httpjson.WriteError(w, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
 }

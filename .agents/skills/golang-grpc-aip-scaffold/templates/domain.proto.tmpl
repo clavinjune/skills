@@ -63,3 +63,12 @@ message Update{{.Domain}}Request {
   {{.Domain}} {{.domain}} = 1 [(google.api.field_behavior) = REQUIRED];
   google.protobuf.FieldMask update_mask = 2 [(google.api.field_behavior) = OPTIONAL];
 }
+
+// AIP-135. A gRPC Delete RPC returns google.protobuf.Empty; import
+// google/protobuf/empty.proto when declaring that service. HTTP returns 204.
+message Delete{{.Domain}}Request {
+  string name = 1 [
+    (google.api.field_behavior) = REQUIRED,
+    (google.api.resource_reference).type = "{{.module}}.example.dev/{{.Domain}}"
+  ];
+}
